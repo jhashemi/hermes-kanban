@@ -849,7 +849,7 @@ def test_max_runtime_terminates_overrun_worker(kanban_home):
         killed.append((pid, sig))
 
     # We bypass _pid_alive by stubbing it so the grace-poll exits fast.
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
     original_alive = _kb._pid_alive
     _kb._pid_alive = lambda pid: False  # pretend SIGTERM worked immediately
 
@@ -899,7 +899,7 @@ def test_max_runtime_terminates_overrun_worker(kanban_home):
 
 def test_repeated_timeouts_auto_block_at_default_limit(kanban_home):
     """Two timed_out outcomes on the same task/profile trip the retry guard."""
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
     original_alive = _kb._pid_alive
     _kb._pid_alive = lambda pid: False
 
@@ -975,7 +975,7 @@ def test_enforce_max_runtime_integrates_with_dispatch(kanban_home, monkeypatch):
     """enforce_max_runtime + dispatch_once integrate cleanly — a timed-out
     task goes through ``timed_out`` → ``ready`` and dispatch_once can then
     re-spawn it without re-reporting the timeout."""
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
     # Leave _pid_alive=True so the crash detector doesn't steal the task
     # before timeout enforcement runs. After SIGTERM in enforce_max_runtime,
     # pretend the worker died so the grace wait exits fast.
@@ -1377,7 +1377,7 @@ def test_run_summary_falls_back_to_result(kanban_home):
 def test_multiple_attempts_preserved_as_runs(kanban_home):
     """Crash / retry / complete flow produces one run per attempt, all
     visible in list_runs in chronological order."""
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
     conn = kb.connect()
     try:
         tid = kb.create_task(conn, title="x", assignee="worker")
@@ -1421,7 +1421,7 @@ def test_multiple_attempts_preserved_as_runs(kanban_home):
 
 def test_stale_run_cannot_complete_new_attempt(kanban_home, monkeypatch):
     """A worker from an earlier attempt cannot close a later retry."""
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
 
     conn = kb.connect()
     try:
@@ -1462,7 +1462,7 @@ def test_stale_run_cannot_complete_new_attempt(kanban_home, monkeypatch):
 
 def test_stale_run_cannot_block_or_heartbeat_new_attempt(kanban_home, monkeypatch):
     """Stale retry attempts cannot mutate the active run lifecycle."""
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
 
     conn = kb.connect()
     try:
@@ -3535,7 +3535,7 @@ def test_reclaim_task_resets_running_to_ready(kanban_home, monkeypatch):
     import signal
     import time
     import secrets
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
     conn = kb.connect()
     try:
         t = kb.create_task(conn, title="stuck", assignee="broken")
@@ -3676,7 +3676,7 @@ def test_reassign_task_with_reclaim_first_switches_profile(kanban_home):
 def test_enforce_max_runtime_increments_consecutive_failures(kanban_home, monkeypatch):
     """A single timeout increments consecutive_failures by 1 (was the
     infinite-respawn gap before unification)."""
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
     state = {"sent_term": False}
     def _alive(pid):
         return not state["sent_term"]
@@ -3729,7 +3729,7 @@ def test_repeated_timeouts_trip_the_circuit_breaker(kanban_home, monkeypatch):
     hit the failure_limit threshold and auto-block the task. This closes
     the Forbidden-Seeds-reported gap where timeout loops never capped.
     """
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
     state = {"sent_term": False}
     def _alive(pid):
         return not state["sent_term"]
@@ -3832,7 +3832,7 @@ def test_detect_crashed_workers_protocol_violation_auto_blocks(kanban_home):
     against small local models (gemma4-e2b q4) where the model writes
     the answer as plain text and the CLI exits rc=0 cleanly.
     """
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
     conn = kb.connect()
     try:
         tid = kb.create_task(conn, title="quiet", assignee="worker")
@@ -3884,7 +3884,7 @@ def test_detect_crashed_workers_nonzero_exit_uses_default_limit(kanban_home):
     """A worker that exited non-zero (real error / crash) uses the
     normal counter path — one failure doesn't trip the breaker.
     """
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
     conn = kb.connect()
     try:
         tid = kb.create_task(conn, title="crashy", assignee="worker")

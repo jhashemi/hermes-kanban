@@ -25,7 +25,7 @@ async def test_notifier_unsubs_after_completed_event(kanban_home):
     """
     Subscription should be remove after completed event
     """
-    import hermes_kanban.kanban_db as _kb kb
+    import hermes_kanban.kanban_db as kb
     from gateway.run import GatewayRunner
     from gateway.config import Platform
 
@@ -78,7 +78,7 @@ async def test_notifier_unsubs_after_abnormal_events(kind, kanban_home):
     """
     Event kind of gave_up, crashed, time_out would be cover, and remove subscription
     """
-    import hermes_kanban.kanban_db as _kb kb
+    import hermes_kanban.kanban_db as kb
     from gateway.run import GatewayRunner
     from gateway.config import Platform
 
@@ -130,7 +130,7 @@ async def test_notifier_second_blocked_delivers(kanban_home):
     """
     After the first blocked, should receive second blocked notification.
     """
-    import hermes_kanban.kanban_db as _kb kb
+    import hermes_kanban.kanban_db as kb
     from gateway.run import GatewayRunner
     from gateway.config import Platform
 
@@ -221,7 +221,7 @@ async def test_notifier_second_blocked_delivers(kanban_home):
 @pytest.mark.asyncio
 async def test_notifier_does_not_call_init_db(kanban_home):
     """Notifier watcher path must not invoke `_kb.init_db` (issue #21378)."""
-    import hermes_kanban.kanban_db as _kb kb
+    import hermes_kanban.kanban_db as kb
     from gateway.run import GatewayRunner
     from gateway.config import Platform
 
@@ -272,7 +272,7 @@ def test_dispatcher_tick_does_not_call_init_db(kanban_home, monkeypatch):
     per process. The explicit `init_db()` call was redundant and triggered a
     second migration on a second connection that raced the first.
     """
-    import hermes_kanban.kanban_db as _kb kb
+    import hermes_kanban.kanban_db as kb
     from gateway.run import GatewayRunner
     from unittest.mock import patch
 

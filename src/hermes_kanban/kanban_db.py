@@ -158,7 +158,7 @@ def kanban_home() -> Path:
     override = os.environ.get("HERMES_KANBAN_HOME", "").strip()
     if override:
         return Path(override).expanduser()
-    from hermes_constants import get_default_hermes_root
+    from hermes_kanban._adapters import get_default_hermes_root
     return get_default_hermes_root()
 
 
@@ -921,7 +921,7 @@ def connect(
     # WAL doesn't work on network filesystems (NFS/SMB/FUSE).  Shared helper
     # falls back to DELETE with one WARNING so kanban stays usable there.
     # See hermes_state._WAL_INCOMPAT_MARKERS for detection logic.
-    from hermes_state import apply_wal_with_fallback
+    from hermes_kanban._adapters import apply_wal_with_fallback
     apply_wal_with_fallback(conn, db_label=f"kanban.db ({path.name})")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -3002,7 +3002,7 @@ def _pid_alive(pid: Optional[int]) -> bool:
     """
     if not pid or pid <= 0:
         return False
-    from gateway.status import _pid_exists
+    from hermes_kanban._adapters import pid_exists as _pid_exists
     if not _pid_exists(int(pid)):
         return False
     # Still here → process exists. Check for zombie on platforms
@@ -4646,7 +4646,7 @@ def list_profiles_on_disk() -> list[str]:
     path).
     """
     try:
-        from hermes_constants import get_default_hermes_root
+        from hermes_kanban._adapters import get_default_hermes_root
         default_root = get_default_hermes_root()
         profiles_dir = default_root / "profiles"
     except Exception:

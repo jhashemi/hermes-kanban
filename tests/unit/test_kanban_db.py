@@ -170,7 +170,7 @@ def test_claim_fails_on_non_ready(kanban_home):
 
 def test_stale_claim_reclaimed(kanban_home, monkeypatch):
     import signal
-    import hermes_kanban.kanban_db as _kb _kb
+    import hermes_kanban.kanban_db as _kb
 
     with kb.connect() as conn:
         t = kb.create_task(conn, title="x", assignee="a")
@@ -525,6 +525,7 @@ def test_dispatch_skips_unassigned(kanban_home):
     assert not res.spawned
 
 
+@pytest.mark.integration
 def test_dispatch_skips_nonspawnable_into_separate_bucket(kanban_home, monkeypatch):
     """Tasks whose assignee fails profile_exists() must NOT land in
     ``skipped_unassigned`` (which is operator-actionable) — they go in
@@ -540,6 +541,7 @@ def test_dispatch_skips_nonspawnable_into_separate_bucket(kanban_home, monkeypat
     assert not res.spawned
 
 
+@pytest.mark.integration
 def test_has_spawnable_ready_false_when_only_terminal_lanes(kanban_home, monkeypatch):
     """``has_spawnable_ready`` returns False when every ready task is
     assigned to a control-plane lane — used by gateway/CLI dispatchers
@@ -552,6 +554,7 @@ def test_has_spawnable_ready_false_when_only_terminal_lanes(kanban_home, monkeyp
         assert kb.has_spawnable_ready(conn) is False
 
 
+@pytest.mark.integration
 def test_has_spawnable_ready_true_when_real_profile_present(kanban_home, monkeypatch):
     """``has_spawnable_ready`` returns True as soon as ANY ready task
     has an assignee that maps to a real Hermes profile — preserves the
@@ -689,6 +692,7 @@ def test_tenant_propagates_to_events(kanban_home):
 # where `kanban_db_path()` resolved to the active profile's HERMES_HOME.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 class TestSharedBoardPaths:
     """`kanban_home`/`kanban_db_path`/`workspaces_root`/`worker_log_path`
     must anchor at the **shared root**, not the active profile's HERMES_HOME."""
