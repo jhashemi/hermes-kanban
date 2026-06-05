@@ -2900,6 +2900,15 @@ class DispatchResult:
     auto_blocked: list[str] = field(default_factory=list)
     """Task ids auto-blocked by the spawn-failure circuit breaker."""
     timed_out: list[str] = field(default_factory=list)
+    # ── Load-aware back-pressure (added 2026-06-05) ──
+    backpressure_active: bool = False
+    """True when this tick capped max_spawn due to host load / memory pressure."""
+    backpressure_reason: Optional[str] = None
+    """Human-readable rationale (e.g. 'load1/cpu=2.10 > 1.5')."""
+    backpressure_original: Optional[int] = None
+    """The max_spawn value the caller passed in before back-pressure capped it."""
+    backpressure_cap: Optional[int] = None
+    """The effective cap applied this tick."""
     """Task ids whose workers exceeded ``max_runtime_seconds``."""
     silent_crashes: list[str] = field(default_factory=list)
     """Task ids whose worker PIDs died silently (detected proactively before TTL).
@@ -3863,6 +3872,72 @@ def dispatch_once(
     )
     if _crash_auto_blocked:
         result.auto_blocked.extend(_crash_auto_blocked)
+
+    # ------ LOAD-AWARE BACK-PRESSURE (added 2026-06-05) ------
+    # Cap effective max_spawn based on host load + free memory to prevent
+    # the cascade we observed during the Ψ-audit triage mass-unblock:
+    #   34 simultaneous worker spawns → load 9.92, mem free 461MB →
+    #   workers OOM-reaped before they could even initialize, looking like
+    #   protocol violations / dead-pid crashes.
+    #
+    # Heuristic:
+    #   - load1 / cpu_count > 1.5 → cap at 2
+    #   - mem free < 500 MB        → cap at 2
+    #   - load1 / cpu_count > 1.0 → cap at 4
+    #   - mem free < 1000 MB       → cap at 4
+    #   - otherwise              → caller's max_spawn (or unlimited)
+    #
+    # Caller can override by setting env HERMES_KANBAN_DISABLE_BACKPRESSURE=1.
+    # The cap is multiplicative with `max_spawn` if both apply (smaller wins).
+    if os.environ.get("HERMES_KANBAN_DISABLE_BACKPRESSURE") != "1":
+        try:
+            cpu_count = max(1, os.cpu_count() or 1)
+            load1, _, _ = os.getloadavg()
+            load_per_cpu = load1 / cpu_count
+            # Read memory free (Linux /proc/meminfo)
+            mem_free_mb = None
+            try:
+                with open("/proc/meminfo") as fh:
+                    for line in fh:
+                        if line.startswith("MemAvailable:"):
+                            mem_free_mb = int(line.split()[1]) // 1024
+                            break
+            except OSError:
+                pass
+
+            backpressure_cap: Optional[int] = None
+            reason: Optional[str] = None
+            if load_per_cpu > 1.5:
+                backpressure_cap = 2
+                reason = f"load1/cpu={load_per_cpu:.2f} > 1.5"
+            elif mem_free_mb is not None and mem_free_mb < 500:
+                backpressure_cap = 2
+                reason = f"mem_free={mem_free_mb}MB < 500MB"
+            elif load_per_cpu > 1.0:
+                backpressure_cap = 4
+                reason = f"load1/cpu={load_per_cpu:.2f} > 1.0"
+            elif mem_free_mb is not None and mem_free_mb < 1000:
+                backpressure_cap = 4
+                reason = f"mem_free={mem_free_mb}MB < 1000MB"
+
+            if backpressure_cap is not None:
+                # Take the smaller of the two caps when caller already set max_spawn
+                effective_cap = (
+                    min(backpressure_cap, max_spawn)
+                    if max_spawn is not None
+                    else backpressure_cap
+                )
+                if effective_cap != max_spawn:
+                    # Stash on the result so observability surfaces it
+                    result.backpressure_active = True
+                    result.backpressure_reason = reason
+                    result.backpressure_original = max_spawn
+                    result.backpressure_cap = effective_cap
+                    max_spawn = effective_cap
+        except Exception:
+            # Back-pressure failure must NEVER break dispatch — log-only
+            pass
+    # ------ END BACK-PRESSURE ------
     
     # NEW: Proactively detect silent worker crashes (dead PIDs still marked running).
     # This catches workers that exit cleanly without calling kanban_complete/kanban_block,
