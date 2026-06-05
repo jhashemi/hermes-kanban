@@ -3873,7 +3873,21 @@ def dispatch_once(
     if _crash_auto_blocked:
         result.auto_blocked.extend(_crash_auto_blocked)
 
-    # ------ LOAD-AWARE BACK-PRESSURE (added 2026-06-05) ------
+    # ------ LOAD-AWARE BACK-PRESSURE BACKSTOP (added 2026-06-05) ------
+    # ⚠️  POLICY NOTE: This is a defense-in-depth BACKSTOP, not the primary
+    # cluster scheduler.  The canonical scheduler is VCGDispatcher
+    # (executive_agents.infrastructure.systems.vcg_dispatcher) which performs
+    # auction + game-theoretic allocation across registered cluster nodes
+    # (hermes2/hermes1/rust-build).  When VCG correctly routes python+systems
+    # work to an idle node (e.g. hermes1 when hermes2 is loaded), this local
+    # back-pressure should never trigger.
+    #
+    # If you see this firing in production, it means VCG is either:
+    #   (a) not populated (NodeRegistry empty — run vcg_register_nodes.py)
+    #   (b) bypassed (gateway spawning workers locally without consulting VCG)
+    #   (c) all candidate nodes are saturated (legitimate cluster-wide overload)
+    # Cases (a) and (b) are bugs to fix, not states to live with.
+    #
     # Cap effective max_spawn based on host load + free memory to prevent
     # the cascade we observed during the Ψ-audit triage mass-unblock:
     #   34 simultaneous worker spawns → load 9.92, mem free 461MB →
