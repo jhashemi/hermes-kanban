@@ -4187,7 +4187,7 @@ def dispatch_once_free(
             result.skipped_unassigned.append(row[0])
             continue
         try:
-            from hermes_cli.profiles import profile_exists  # noqa: PLC0415
+            from hermes_kanban._adapters import profile_exists  # local import: avoids cycle
         except Exception:
             profile_exists = None  # type: ignore[assignment]
         if profile_exists is not None and not profile_exists(row[1]):
