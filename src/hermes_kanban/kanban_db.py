@@ -2913,6 +2913,8 @@ class DispatchResult:
     silent_crashes: list[str] = field(default_factory=list)
     """Task ids whose worker PIDs died silently (detected proactively before TTL).
     Transitioned to 'paused' status with error recorded for manual intervention."""
+    tree_depth: int = 0
+    """Maximum task-tree depth traversed during dispatch (0 = flat/no tree)."""
 
 
 # Bounded registry of recently-reaped worker child exits, populated by the
@@ -4050,6 +4052,187 @@ def dispatch_once(
             )
             if auto:
                 result.auto_blocked.append(claimed.id)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# dispatch_once_free: task-tree unfolding variant (Gap G-S5-H1-1 remediation)
+# ---------------------------------------------------------------------------
+
+def _build_task_subtree(
+    conn: sqlite3.Connection,
+    ready_ids: list[str],
+    *,
+    max_bfs_depth: int = 10,
+) -> "dict[str, dict]":
+    """BFS from ``ready_ids`` through task_links to build a candidate subtree.
+
+    Returns a dict mapping task_id -> {"depth": int, "descendant_count": int,
+    "descendant_priority_sum": float} for every task reachable from ``ready_ids``
+    (including the roots at depth 0).
+    """
+    info: "dict[str, dict]" = {}
+    frontier: "list[tuple[str, int]]" = [(tid, 0) for tid in ready_ids]
+    visited: "set[str]" = set(ready_ids)
+
+    for tid in ready_ids:
+        info[tid] = {"depth": 0, "descendant_count": 0, "descendant_priority_sum": 0.0}
+
+    while frontier:
+        next_frontier: "list[tuple[str, int]]" = []
+        for parent_id, depth in frontier:
+            if depth >= max_bfs_depth:
+                continue
+            rows = conn.execute(
+                "SELECT t.id, t.priority FROM tasks t "
+                "JOIN task_links l ON l.child_id = t.id "
+                "WHERE l.parent_id = ?",
+                (parent_id,),
+            ).fetchall()
+            for row in rows:
+                child_id = row[0]
+                child_priority = row[1] or 0.0
+                child_depth = depth + 1
+                if child_id not in visited:
+                    visited.add(child_id)
+                    info[child_id] = {
+                        "depth": child_depth,
+                        "descendant_count": 0,
+                        "descendant_priority_sum": 0.0,
+                    }
+                    next_frontier.append((child_id, child_depth))
+                ancestor = parent_id
+                while ancestor is not None:
+                    if ancestor in info:
+                        info[ancestor]["descendant_count"] += 1
+                        info[ancestor]["descendant_priority_sum"] += child_priority
+                    ancestor = None
+        frontier = next_frontier
+
+    return info
+
+
+def dispatch_once_free(
+    conn: sqlite3.Connection,
+    *,
+    spawn_fn=None,
+    ttl_seconds: int = DEFAULT_CLAIM_TTL_SECONDS,
+    dry_run: bool = False,
+    max_spawn: Optional[int] = None,
+    failure_limit: int = DEFAULT_SPAWN_FAILURE_LIMIT,
+    board: Optional[str] = None,
+) -> DispatchResult:
+    """``dispatch_once`` variant that unfolds a candidate task-tree (depth >= 2).
+
+    See hermes_cli/kanban_db.py for full docstring and implementation notes.
+    This copy is kept in sync for the hermes-kanban project mirror.
+    """
+    if os.name != "nt":
+        try:
+            while True:
+                try:
+                    _pid, _status = os.waitpid(-1, os.WNOHANG)
+                except ChildProcessError:
+                    break
+                if _pid == 0:
+                    break
+                _record_worker_exit(_pid, _status)
+        except Exception:
+            pass
+
+    result = DispatchResult()
+    result.reclaimed = release_stale_claims(conn)
+    result.crashed = detect_crashed_workers(conn)
+    _crash_auto_blocked = getattr(detect_crashed_workers, "_last_auto_blocked", [])
+    if _crash_auto_blocked:
+        result.auto_blocked.extend(_crash_auto_blocked)
+
+    _silent_crashes = handle_dead_worker_pids(conn)
+    if _silent_crashes:
+        result.silent_crashes = _silent_crashes
+
+    result.timed_out = enforce_max_runtime(conn)
+    result.promoted = recompute_ready(conn)
+
+    ready_rows = conn.execute(
+        "SELECT id, assignee, priority, created_at FROM tasks "
+        "WHERE status = 'ready' AND claim_lock IS NULL "
+        "ORDER BY priority DESC, created_at ASC"
+    ).fetchall()
+
+    if not ready_rows:
+        return result
+
+    ready_ids = [r[0] for r in ready_rows]
+    subtree_info = _build_task_subtree(conn, ready_ids)
+
+    all_depths = [v["depth"] for v in subtree_info.values()]
+    max_reachable_depth = max(all_depths) if all_depths else 0
+    result.tree_depth = max_reachable_depth
+
+    def _score(row: sqlite3.Row) -> "tuple[int, float, float, int]":
+        tid = row[0]
+        info = subtree_info.get(tid, {"descendant_count": 0, "descendant_priority_sum": 0.0})
+        priority = row[2] or 0.0
+        created_at = row[3] or 0
+        return (info["descendant_count"], info["descendant_priority_sum"], priority, -created_at)
+
+    ranked = sorted(ready_rows, key=_score, reverse=True)
+
+    spawned = 0
+    for row in ranked:
+        if max_spawn is not None and spawned >= max_spawn:
+            break
+        if not row[1]:
+            result.skipped_unassigned.append(row[0])
+            continue
+        try:
+            from hermes_cli.profiles import profile_exists  # noqa: PLC0415
+        except Exception:
+            profile_exists = None  # type: ignore[assignment]
+        if profile_exists is not None and not profile_exists(row[1]):
+            result.skipped_nonspawnable.append(row[0])
+            continue
+        if dry_run:
+            result.spawned.append((row[0], row[1], ""))
+            continue
+        claimed = claim_task(conn, row[0], ttl_seconds=ttl_seconds)
+        if claimed is None:
+            continue
+        try:
+            workspace = resolve_workspace(claimed, board=board)
+        except Exception as exc:
+            auto = _record_spawn_failure(
+                conn, claimed.id, f"workspace: {exc}",
+                failure_limit=failure_limit,
+            )
+            if auto:
+                result.auto_blocked.append(claimed.id)
+            continue
+        set_workspace_path(conn, claimed.id, str(workspace))
+        _spawn = spawn_fn if spawn_fn is not None else _default_spawn
+        try:
+            import inspect  # noqa: PLC0415
+            try:
+                sig = inspect.signature(_spawn)
+                if "board" in sig.parameters:
+                    pid = _spawn(claimed, str(workspace), board=board)
+                else:
+                    pid = _spawn(claimed, str(workspace))
+            except (TypeError, ValueError):
+                pid = _spawn(claimed, str(workspace))
+            if pid:
+                _set_worker_pid(conn, claimed.id, int(pid))
+            result.spawned.append((claimed.id, claimed.assignee or "", str(workspace)))
+            spawned += 1
+        except Exception as exc:
+            auto = _record_spawn_failure(
+                conn, claimed.id, str(exc),
+                failure_limit=failure_limit,
+            )
+            if auto:
+                result.auto_blocked.append(claimed.id)
+
     return result
 
 
